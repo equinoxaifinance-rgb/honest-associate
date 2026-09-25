@@ -173,7 +173,7 @@ $('#askBtn').onclick = async () => {
       </div>`
     }
     if(d.gap) h += `<div class="gap"><b>What this corpus doesn't answer:</b> ${esc(d.gap)}</div>`
-    h += `<div class="meta">searches tried: ${(d.searchesTried||[]).map(esc).join(' · ')} — opinions read in full: ${Number(d.evidenceCount) || 0}${d.served==='cache' ? ' — served from cache' : ''}</div>`
+    h += `<div class="meta">searches tried: ${(d.searchesTried||[]).map(esc).join(' · ')} — ${esc(d.evidenceNote || ('opinions read: ' + (Number(d.evidenceCount) || 0)))}${d.served==='cache' ? ' — served from cache' : ''}</div>`
     $('#askOut').innerHTML = h || '<div class="gap">No grounded claims could be made.</div>'
   } catch(e){ $('#askOut').innerHTML = `<div class="gap">request failed: ${esc(e.message)}</div>` }
   finally { $('#askBtn').disabled = false }
