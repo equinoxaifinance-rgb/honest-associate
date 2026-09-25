@@ -11,15 +11,16 @@ tags: devchallenge, sanitychallenge, sanity, ai
 In 2023, lawyers were sanctioned for filing a brief full of cases ChatGPT invented. *Varghese v.
 China Southern Airlines* became the most famous court case that never existed.
 
-Paste that exact citation into my agent's verify tab and it answers in half a second:
+Paste that exact citation into my agent's verify tab and it answers in about a second — a
+database lookup, not a model call:
 
 ![NOT IN CORPUS — the fabricated Varghese citation rejected with a red stamp](https://honest-associate.neoaethel.workers.dev/media/varghese-stamp.jpg)
 
 **NOT IN CORPUS.** And unlike a chatbot, it cannot be talked out of that answer — because the
 answer comes from a database query, not a model's memory.
 
-**Honest Associate** is a legal research agent over 350 real published court opinions (every
-SCOTUS decision June 2025 → Sept 2026, plus 250 published Fourth Circuit decisions), ingested
+**Honest Associate** is a legal research agent over 350 real published court opinions (the 100
+most recent SCOTUS opinions, June 2025 → Sept 2026, plus 250 published Fourth Circuit decisions), ingested
 from CourtListener (Free Law Project, public domain) into a Sanity dataset. Its one design rule:
 **trust is a property of the system, not a promise from the model.** The model only drafts.
 Everything that makes it trustworthy is mechanical:
@@ -71,15 +72,16 @@ One-tap demos, shareable as deep links:
 
 ![The machinery, explained on the page itself](https://honest-associate.neoaethel.workers.dev/media/how-it-stays-honest.jpg)
 
-(Uncached questions take ~20–40s — the verifier reads whole opinions. The demo runs on a
-spend-capped key with a daily ration; the verify tab is unmetered, hammer it freely.)
+(Uncached questions typically take tens of seconds — the verifier reads whole opinions. The demo
+runs on a spend-capped key with a daily ration; the verify tab costs no AI spend, so try it
+freely — a light per-IP rate limit applies to everything.)
 
 ## Code
 
 https://github.com/equinoxaifinance-rgb/honest-associate
 
 Worker (agent + verifier + UI), ingest pipeline, Studio schema, and the test drivers — including
-the ablation driver and the engine-swap pilot. MIT-spirited; court data is public domain via the
+the ablation driver and the engine-swap pilot. MIT licensed; court data is public domain via the
 Free Law Project.
 
 ## How I Used Sanity
@@ -118,7 +120,8 @@ path.
 The agent was built end-to-end by an AI agent (Claude, in Claude Code) running under a
 verification harness — and the build process *is* the product thesis: a 40-agent adversarial
 audit found real holes (including one in the verifier itself), every finding was refuted or
-confirmed by independent reviewers, and the fixes shipped the same night.
+confirmed by separate refuter agents briefed to kill each finding, and the fixes shipped the
+same night.
 
 Excerpts of the verifier catching the model mid-fabrication, with unedited logs:
 https://github.com/equinoxaifinance-rgb/honest-associate/blob/main/docs/agent-session-excerpt.md
