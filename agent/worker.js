@@ -32,13 +32,16 @@ const MAX_Q = 500              // question length cap
 const RATE_LIMIT = 20          // per IP per 10 min (per-isolate; demo-tier)
 const MAX_SEARCHES = 4         // seek-before-no budget
 const ANSWER_BUDGET = 3000     // response-token budget — 1500 truncated 6-claim answers mid-JSON (measured 2026-09-23)
-const DAILY_ASK_CAP = 150      // global answered-questions/day (KV-backed; the per-IP limiter is per-isolate and resets)
-const CACHE_TTL = 7 * 86400    // identical questions serve the stored verified answer for $0
+// COST BOUND (audit 2026-09-25: 360k chars × 150/day worst-cased ~$31/day vs the $25/MONTH key
+// cap — the bound must hold on the worst day): 240k chars ≈ 60k tokens ≈ 7¢/ask incl. retry;
+// 80/day × 7¢ ≈ $5.6 worst-day, so even sustained abuse cannot kill the key inside judging week.
+const DAILY_ASK_CAP = 80       // global answered-questions/day (KV-backed; the per-IP limiter is per-isolate and resets)
+const CACHE_TTL = 7 * 86400    // verified answers serve from cache for $0
+const CACHE_TTL_DEGRADED = 6 * 3600 // zero-claim/degraded answers expire fast — outages must not be immortalized
 const EVIDENCE_DOCS = 4        // opinions read per question
 // Dynamic evidence budget (2026-09-25, Bryan: "truncation doesnt become a factor"): short opinions
-// go in FULL; the shared budget's leftovers flow to the giants. Equal 28k slices cut EVERY big
-// opinion (dissents live at the end); dynamic allocation makes truncation the rare exception.
-const TOTAL_EVIDENCE_CHARS = 360000  // ~90k tokens ≈ 9¢/ask at Haiku list price (Bryan 2026-09-25: "truncation doesnt become a factor")
+// go in FULL; the shared budget's leftovers flow to the giants; cut giants get head+tail windows.
+const TOTAL_EVIDENCE_CHARS = 240000
 const MIN_SLICE = 20000              // no doc gets starved below this
 
 // ---------- Sanity data access (GROQ over the HTTP API) ----------
@@ -56,7 +59,9 @@ const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').re
 // ---------- Sanity Context MCP lane (Path One: searches run THROUGH the hosted MCP endpoint;
 // direct GROQ is the disclosed fallback, never a silent one) ----------
 const CONTEXT_MCP = 'https://api.sanity.io/v1/context/organizations/oq358bde9/mcp/honest-associate-opinions'
-let mcpSession = null, mcpReady = false // per-isolate
+// per-isolate session; init deduplicated through ONE promise so concurrent requests can't
+// interleave the handshake (audit: two racers overwrote each other's session ids)
+let mcpSession = null, mcpInit = null
 async function mcpRpc(env, method, params, id) {
   const headers = { 'content-type': 'application/json', accept: 'application/json, text/event-stream', authorization: `Bearer ${env.SANITY_CONTEXT_TOKEN}` }
   if (mcpSession) headers['mcp-session-id'] = mcpSession
@@ -75,11 +80,14 @@ async function mcpRpc(env, method, params, id) {
 }
 async function mcpGroq(env, query) {
   if (!env.SANITY_CONTEXT_TOKEN) throw new Error('no context token configured')
-  if (!mcpReady) {
-    await mcpRpc(env, 'initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'honest-associate-worker', version: '1.0' } }, 1)
-    await mcpRpc(env, 'notifications/initialized', {})
-    mcpReady = true
+  if (!mcpInit) {
+    mcpInit = (async () => {
+      await mcpRpc(env, 'initialize', { protocolVersion: '2025-03-26', capabilities: {}, clientInfo: { name: 'honest-associate-worker', version: '1.0' } }, 1)
+      await mcpRpc(env, 'notifications/initialized', {})
+    })()
+    mcpInit.catch(() => { mcpInit = null; mcpSession = null }) // failed handshake resets cleanly
   }
+  await mcpInit
   const r = await mcpRpc(env, 'tools/call', { name: 'groq_query', arguments: { query } }, 2)
   if (r?.isError) throw new Error('mcp: tool error ' + String((r.content || [])[0]?.text || '').slice(0, 60))
   const text = (r?.content || []).filter((c) => c.type === 'text').map((c) => c.text).join('\n')
@@ -102,7 +110,8 @@ async function searchOpinions(env, q, limit = 5) {
     const rows = await mcpGroq(env, query)
     return Object.assign(Array.isArray(rows) ? rows : [], { lane: 'context-mcp' })
   } catch (e) {
-    mcpReady = false // stale session gets a fresh handshake next call
+    // full reset: a DEAD session id must not ride into the next handshake (audit: wedged-lane loop)
+    mcpInit = null; mcpSession = null
     const rows = await groq(env, query, {})
     return Object.assign(rows || [], { lane: `direct-groq (mcp: ${String(e.message).slice(0, 40)})` })
   }
@@ -123,17 +132,21 @@ async function corpusBanner(env) {
 // real fabrication class ("granted" for "given", caught same day). Squeeze forgives the
 // former and still kills the latter.
 const squeeze = (s) => norm(String(s || '').replace(/([A-Za-z])-\s*\n\s*(?=[a-z])/g, '$1')).replace(/ /g, '')
-function verifyQuotes(claims, evidenceById) {
+// verifyMap[id] = { sqShown, sqFull } — squeezed ONCE per doc (memoized; recomputing per claim
+// burned CPU on 500k-char strings). DUAL CHECK (audit catch 2026-09-25): a quote must exist in
+// the text the model was actually SHOWN (else it recalled it from weights — e.g. the omitted
+// middle of a famous case) AND in the full stored opinion (else it stitched across the omission
+// seam). Shown-only or full-only both fail; the core guarantee holds on both edges.
+function verifyQuotes(claims, verifyMap) {
   const violations = []
   for (const c of claims || []) {
     if (!c.quote) { violations.push({ claim: c, why: 'claim has no quote — naked assertions are not carried' }); continue }
-    // accept either key — the model coin-flips between the schema's name and the tag's name
-    const ev = evidenceById[c.courtListenerId ?? c.clusterId]
+    const ev = verifyMap[c.courtListenerId]
     if (!ev) { violations.push({ claim: c, why: 'cites a document not in the evidence set' }); continue }
-    const hay = squeeze(ev.fullText)
     const needle = squeeze(c.quote)
     if (needle.length < 20) { violations.push({ claim: c, why: 'quote too short to verify' }); continue }
-    if (!hay.includes(needle)) violations.push({ claim: c, why: 'quote not found verbatim in the cited opinion (letter-for-letter, whitespace ignored)' })
+    if (!ev.sqShown.includes(needle)) { violations.push({ claim: c, why: 'quote not found in the evidence text you were shown' }); continue }
+    if (!ev.sqFull.includes(needle)) violations.push({ claim: c, why: 'quote does not appear contiguously in the opinion (do not quote across the omission marker)' })
   }
   return violations
 }
@@ -153,44 +166,72 @@ async function semanticSearch(env, question, limit = 3) {
   return (rows || [])
     .map((r) => /^opinion-cl-(\d+)$/.exec(String(r.value?.documentId || '')))
     .filter(Boolean)
-    .map((m) => ({ courtListenerId: Number(m[1]), caseName: '(semantic hit)' }))
+    .map((m) => ({ courtListenerId: Number(m[1]) }))
 }
 
 // ---------- Organ: seek-before-no ----------
+// Ordering matters (audit 2026-09-25): KEYWORD hits fill evidence first (term-scored relevance),
+// semantic neighbors FILL remaining slots (they are nearest-3 regardless of similarity strength,
+// so they must never displace scored matches). Semantic + first keyword query run in PARALLEL.
 async function seek(env, question) {
   const tried = []
-  const seen = new Map()
+  const keyword = new Map()
+  const semantic = new Map()
+  let lanesTried = 0, lanesFailed = 0
   const queries = [question]
   const words = question.split(/\s+/).filter((w) => w.length > 3)
   if (words.length > 2) queries.push(words.slice(0, 6).join(' '))
   if (words.length > 4) queries.push(words.slice(-5).join(' '))
-  // semantic lane first: meaning-based recall over all 350 opinions via the embeddings index
-  try {
-    const sem = await semanticSearch(env, question, 3)
-    tried.push(`semantic [via embeddings-index: ${sem.length} hits]`)
-    for (const h of sem) if (!seen.has(h.courtListenerId)) seen.set(h.courtListenerId, h)
-  } catch (e) { tried.push(`semantic [embeddings unavailable: ${String(e.message).slice(0, 30)}]`) }
-  for (const q of queries.slice(0, MAX_SEARCHES)) {
+
+  const runKeyword = async (q) => {
+    lanesTried++
     try {
       const hits = await searchOpinions(env, q, 5)
       tried.push(`${q} [via ${hits.lane || '?'}]`)
-      for (const h of hits || []) if (h && !seen.has(h.courtListenerId)) seen.set(h.courtListenerId, h)
-    } catch (e) { tried.push(`${q} [search failed: ${String(e.message).slice(0, 40)}]`) }
-    if (seen.size >= 6) break
+      for (const h of hits || []) if (h && !keyword.has(h.courtListenerId)) keyword.set(h.courtListenerId, h)
+    } catch (e) { lanesFailed++; tried.push(`${q} [search failed: ${String(e.message).slice(0, 40)}]`) }
   }
-  return { tried, hits: [...seen.values()] }
+  const runSemantic = async () => {
+    lanesTried++
+    try {
+      const sem = await semanticSearch(env, question, 3)
+      tried.push(`semantic [via embeddings-index: ${sem.length} hits]`)
+      for (const h of sem) if (!semantic.has(h.courtListenerId)) semantic.set(h.courtListenerId, h)
+    } catch (e) { lanesFailed++; tried.push(`semantic [embeddings unavailable: ${String(e.message).slice(0, 30)}]`) }
+  }
+
+  await Promise.all([runSemantic(), runKeyword(queries[0])])
+  // reformulations still run while keyword recall is thin — semantic hits must not starve them
+  for (const q of queries.slice(1, MAX_SEARCHES)) {
+    if (keyword.size >= 5) break
+    await runKeyword(q)
+  }
+  const hits = [...keyword.values()]
+  for (const h of semantic.values()) if (!keyword.has(h.courtListenerId)) hits.push(h)
+  return { tried, hits, allLanesFailed: lanesTried > 0 && lanesFailed === lanesTried }
 }
 
 // ---------- The agent answer route ----------
+// per-isolate banner cache: the corpus changes at ingest time, not per request
+let bannerCache = { t: 0, v: null }
+async function bannerCached(env) {
+  if (Date.now() - bannerCache.t < 300000 && bannerCache.v) return bannerCache.v
+  try { bannerCache = { t: Date.now(), v: await corpusBanner(env) }; return bannerCache.v } catch { return bannerCache.v }
+}
+
 async function answer(env, question) {
-  const banner = await corpusBanner(env)
-  const { tried, hits } = await seek(env, question)
+  // banner off the critical path + seek in parallel (audit: serial waterfall cost seconds/ask)
+  const [banner, { tried, hits, allLanesFailed }] = await Promise.all([bannerCached(env), seek(env, question)])
+
+  // ALL search lanes down ≠ "not in corpus" — an infra outage must never wear a corpus-boundary
+  // gap (and must not burn a model call). Disclosed as retryable, never cached.
+  if (allLanesFailed && hits.length === 0) {
+    return { banner, searchesTried: tried, evidenceCount: 0, evidenceNote: 'search unavailable', enforcementFired: false, claims: [], summary: '', infraDown: true, gap: 'Search is temporarily unavailable — this says NOTHING about the corpus. Please retry in a minute.' }
+  }
 
   const evidenceById = {}
-  for (const h of hits.slice(0, EVIDENCE_DOCS)) {
-    const full = await getFullOpinion(env, h.courtListenerId)
-    if (full) evidenceById[h.courtListenerId] = full
-  }
+  const fulls = await Promise.all(hits.slice(0, EVIDENCE_DOCS).map((h) => getFullOpinion(env, h.courtListenerId).catch(() => null)))
+  hits.slice(0, EVIDENCE_DOCS).forEach((h, i) => { if (fulls[i]) evidenceById[h.courtListenerId] = fulls[i] })
 
   // NO SILENT CAPS (law): dynamic allocation first (small docs FULL, leftovers to the giants),
   // and any remaining truncation is counted and DISCLOSED — a cut opinion must never read as "the corpus
@@ -199,8 +240,9 @@ async function answer(env, question) {
   const docs = Object.entries(evidenceById).map(([id, e]) => ({ id, e, clean: String(e.fullText).replace(/([A-Za-z])-\s*\n\s*(?=[a-z])/g, '$1') }))
   docs.sort((a, b) => a.clean.length - b.clean.length) // smallest first: they take only what they need
   let remaining = TOTAL_EVIDENCE_CHARS
-  let truncatedCount = 0
+  let truncatedCount = 0, storageCapped = 0
   const parts = []
+  const verifyMap = {} // per-doc squeezed text, computed ONCE (CPU audit: per-claim recompute on 500k strings)
   for (let i = 0; i < docs.length; i++) {
     const d = docs[i]
     const fair = Math.max(MIN_SLICE, Math.floor(remaining / (docs.length - i)))
@@ -208,17 +250,21 @@ async function answer(env, question) {
     remaining -= alloc
     const cut = d.clean.length > alloc
     if (cut) truncatedCount++
+    if (d.clean.length >= 495000) storageCapped++ // ingest stores at most 500k — disclose, never imply "full"
     // head+tail windowing on cut docs: dissents/concurrences live at the END of an opinion, so a
     // cut doc keeps its opening AND its ending — only the MIDDLE is omitted, and loudly.
     const body = cut
       ? `${d.clean.slice(0, Math.floor(alloc * 0.6))}\n\n[... MIDDLE OF OPINION OMITTED (${d.clean.length - alloc} chars) — text below resumes near the end of the document, where concurrences and dissents appear ...]\n\n${d.clean.slice(d.clean.length - Math.floor(alloc * 0.4))}`
       : d.clean
+    // DUAL-CHECK verification map (audit): sqShown = what the model was actually handed;
+    // sqFull = the whole stored opinion. A quote must live in BOTH.
+    verifyMap[Number(d.id)] = { sqShown: squeeze(body), sqFull: squeeze(d.clean) }
     parts.push(`<opinion courtListenerId="${d.id}" case="${d.e.caseName}" court="${d.e.court}" filed="${d.e.dateFiled}" status="${d.e.precedentialStatus}"${cut ? ' middleOmitted="true — opening and ending included; do not quote across the omission marker"' : ''}>\n${body}\n</opinion>`)
   }
   const evidenceBlock = parts.join('\n\n')
-  const evidenceNote = truncatedCount
+  const evidenceNote = (truncatedCount
     ? `${docs.length - truncatedCount} of ${docs.length} opinions read in full; ${truncatedCount} read head+tail (middle omitted, endings incl. dissents in-window)`
-    : `all ${docs.length} opinions read in full`
+    : `all ${docs.length} opinions read in full`) + (storageCapped ? `; ${storageCapped} at the 500k-char storage cap` : '')
 
   const system = `You are the Honest Associate, a legal research aid answering ONLY from the court opinions provided in <opinion> blocks. Rules (mechanically enforced downstream — violations are rejected):
 1. Every claim about a case must include a verbatim quote from that opinion (15+ words) in the "quote" field, plus the "courtListenerId" copied from that opinion's courtListenerId attribute. Copy the quote as ONE exact contiguous span — change no words, fix no grammar, no ellipses, never stitch two passages together.
@@ -239,9 +285,19 @@ Respond ONLY with JSON: {"claims":[{"grade":"DIRECT_QUOTE|SUPPORTED|RELATED","st
     if (!res.ok) throw new Error(`model ${res.status}`)
     const j = await res.json()
     const txt = (j.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('')
+    // tame the model's shape at the single write site (audit: claims:"none" crashed downstream;
+    // clusterId coin-flips; extra keys must never survive to the spread)
+    const tame = (o) => {
+      if (!o || typeof o !== 'object' || Array.isArray(o)) return { claims: [], gap: 'model returned no parseable answer', summary: '' }
+      const claims = (Array.isArray(o.claims) ? o.claims : []).filter((c) => c && typeof c === 'object').map((c) => ({
+        grade: String(c.grade || 'RELATED'), statement: String(c.statement || ''), quote: String(c.quote || ''),
+        caseName: String(c.caseName || ''), courtListenerId: Number(c.courtListenerId ?? c.clusterId),
+      }))
+      return { claims, gap: String(o.gap || ''), summary: String(o.summary || '') }
+    }
     const m = txt.match(/\{[\s\S]*\}/)
     if (!m) return { claims: [], gap: 'model returned no parseable answer', summary: '' }
-    try { return JSON.parse(m[0]) } catch {}
+    try { return tame(JSON.parse(m[0])) } catch {}
     // salvage a max_tokens-truncated response: walk back to the last complete claim object and
     // re-close the JSON. Recovered claims still pass through the quote verifier like any others.
     const s = m[0]
@@ -251,8 +307,9 @@ Respond ONLY with JSON: {"claims":[{"grade":"DIRECT_QUOTE|SUPPORTED|RELATED","st
           const cand = JSON.parse(s.slice(0, pos + 1) + closer)
           if (cand && Array.isArray(cand.claims)) {
             console.log(`SALVAGE: recovered ${cand.claims.length} claims from truncated JSON (stop_reason=${j.stop_reason})`)
-            cand.gap = ((cand.gap || '') + ' [The answer was truncated by the response budget; complete claims were kept.]').trim()
-            return cand
+            const t = tame(cand)
+            t.gap = (t.gap + ' [The answer was truncated by the response budget; complete claims were kept.]').trim()
+            return t
           }
         } catch {}
       }
@@ -261,7 +318,7 @@ Respond ONLY with JSON: {"claims":[{"grade":"DIRECT_QUOTE|SUPPORTED|RELATED","st
   }
 
   let out = await call()
-  let violations = verifyQuotes(out.claims, evidenceById)
+  let violations = verifyQuotes(out.claims, verifyMap)
   let enforced = false
   if (violations.length) {
     enforced = true
@@ -273,7 +330,7 @@ Respond ONLY with JSON: {"claims":[{"grade":"DIRECT_QUOTE|SUPPORTED|RELATED","st
       // keep round 1 and let the strip below remove its violating claims
       console.log('QUOTE-VERIFIER retry call failed, degrading to stripped round 1:', String(e.message))
     }
-    violations = verifyQuotes(out.claims, evidenceById)
+    violations = verifyQuotes(out.claims, verifyMap)
     if (violations.length) {
       console.log('QUOTE-VERIFIER round 2:', JSON.stringify(violations.map((v) => ({ why: v.why, case: v.claim.caseName, q: String(v.claim.quote || '').slice(0, 120) }))))
       const bad = new Set(violations.map((v) => v.claim))
@@ -288,18 +345,24 @@ Respond ONLY with JSON: {"claims":[{"grade":"DIRECT_QUOTE|SUPPORTED|RELATED","st
     out.summary = ''
   }
 
-  // source links come from the evidence store (server-side truth), never from model output
+  // EVERYTHING displayable comes from the evidence store (server-side truth), never from model
+  // output — including caseName (audit: a verbatim quote + wrong famous-case name slipped through)
   for (const c of out.claims || []) {
-    const ev = evidenceById[c.courtListenerId ?? c.clusterId]
-    if (ev) { c.absoluteUrl = ev.absoluteUrl; c.court = ev.court; c.dateFiled = ev.dateFiled; c.precedentialStatus = ev.precedentialStatus }
+    const ev = evidenceById[c.courtListenerId]
+    if (ev) { c.caseName = ev.caseName; c.absoluteUrl = ev.absoluteUrl; c.court = ev.court; c.dateFiled = ev.dateFiled; c.precedentialStatus = ev.precedentialStatus }
   }
 
-  return { banner, searchesTried: tried, evidenceCount: Object.keys(evidenceById).length, evidenceNote, enforcementFired: enforced, ...out }
+  // model fields WHITELISTED — spread-order audit: model JSON must never overwrite server truth
+  return { banner, searchesTried: tried, evidenceCount: Object.keys(evidenceById).length, evidenceNote, enforcementFired: enforced, claims: out.claims || [], gap: out.gap || '', summary: out.summary || '' }
 }
 
 // ---------- The citation-verifier route (the demo button) ----------
 async function verifyCitation(env, input) {
   const q = String(input || '').slice(0, 200)
+  const nq = norm(q)
+  // guard the name-match lane against fragments and empty-norm inputs (audit: 'United States' or
+  // pure-punctuation pasted → includes('') matched the first arbitrary row → false green stamp)
+  const nameMatchable = nq.length >= 10
   const byCite = await groq(env, `*[_type == "opinion" && $q in citations][0]{ caseName, citations, court, dateFiled, absoluteUrl, courtListenerId, "excerpt": summary }`, { q })
   // some ingested docs have an empty search snippet — fall back to the opinion's own opening text
   const withExcerpt = async (m) => {
@@ -311,7 +374,13 @@ async function verifyCitation(env, input) {
   }
   if (byCite) return { verdict: 'FOUND_BY_CITATION', match: await withExcerpt(byCite) }
   const hits = await searchOpinions(env, q, 3)
-  const strong = (hits || []).find((h) => norm(h.caseName).includes(norm(q)) || norm(q).includes(norm(h.caseName)))
+  // FOUND_BY_NAME requires substance: the input must cover >=60% of the matched case name, or
+  // contain the full case name — a fragment must never earn the green stamp
+  const strong = nameMatchable && (hits || []).find((h) => {
+    const hn = norm(h.caseName)
+    if (!hn) return false
+    return (hn.includes(nq) && nq.length >= 0.6 * hn.length) || nq.includes(hn)
+  })
   if (strong) return { verdict: 'FOUND_BY_NAME', match: await withExcerpt(strong) }
   return {
     verdict: 'NOT_IN_CORPUS',
@@ -324,6 +393,7 @@ async function verifyCitation(env, input) {
 // ---------- HTTP plumbing ----------
 const RL = new Map()
 function rateLimited(ip) {
+  if (RL.size > 3000) RL.clear() // crude eviction: an IP sweep must not grow the map unbounded
   const now = Date.now()
   const fresh = (RL.get(ip) || []).filter((t) => now - t < 600000)
   fresh.push(now)
@@ -331,8 +401,13 @@ function rateLimited(ip) {
   return fresh.length > RATE_LIMIT
 }
 
+async function sha256(s) {
+  const d = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s))
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('')
+}
+
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url)
     // same-origin only: the UI is served by this worker, so no cross-origin caller is legitimate.
     // CORS doesn't stop curl (the caps do) — this just denies third-party BROWSER embedding.
@@ -348,30 +423,48 @@ export default {
     const ip = request.headers.get('cf-connecting-ip') || 'local'
     try {
       if (url.pathname === '/api/banner') {
-        return new Response(JSON.stringify(await corpusBanner(env)), { headers: cors })
+        const b = await corpusBanner(env)
+        if (!b) return new Response(JSON.stringify({ error: 'corpus banner unavailable' }), { status: 503, headers: cors })
+        return new Response(JSON.stringify(b), { headers: cors })
       }
       if (url.pathname === '/api/ask' && request.method === 'POST') {
         if (rateLimited(ip)) return new Response(JSON.stringify({ error: 'rate limit — try again in a few minutes' }), { status: 429, headers: cors })
         const { question } = await request.json()
-        if (!question || question.length > MAX_Q) return new Response(JSON.stringify({ error: `question required, max ${MAX_Q} chars` }), { status: 400, headers: cors })
+        // typeof guard (audit: {"question":42} passed validation and burned a budget slot on a crash)
+        if (typeof question !== 'string' || !question.trim() || question.length > MAX_Q) {
+          return new Response(JSON.stringify({ error: `question must be a string, max ${MAX_Q} chars` }), { status: 400, headers: cors })
+        }
 
-        // cache first: identical questions cost $0 and answer instantly (disclosed via served field)
-        const qKey = 'q:' + norm(question).slice(0, 480)
+        // cache: SHA-256 of the full trimmed/lowercased question (audit: norm() collapsed ALL
+        // non-ASCII questions to one key; 480-char slices collided) + corpus version, so a
+        // re-ingest invalidates old answers instead of contradicting the live banner.
+        const banner = await bannerCached(env)
+        const qKey = `q:${(banner && banner.ingestedAt) || 'v0'}:${await sha256(question.trim().toLowerCase())}`
         const cached = env.ASK_GUARD ? await env.ASK_GUARD.get(qKey) : null
         if (cached) return new Response(JSON.stringify({ ...JSON.parse(cached), served: 'cache' }), { headers: cors })
 
-        // global daily budget: a shared KV counter distributed abuse can't reset. KV is not
-        // atomic, so we PRE-increment before the model call — the race window is the ~1s put,
-        // not the ~20s answer (audit finding 2026-09-24). Overshoot is bounded by the per-IP
-        // limiter and, ultimately, the key's $25 spend cap; this is a breaker, not a ledger.
+        // global daily budget: a shared KV counter distributed abuse can't reset. PRE-incremented
+        // (small race window beats a 20s one); REFUNDED if answer() throws, so failures don't
+        // drain the ration. Breaker, not a ledger — the $25 key cap is the final backstop.
         const day = 'budget:' + new Date().toISOString().slice(0, 10)
         const used = Number((env.ASK_GUARD && (await env.ASK_GUARD.get(day))) || 0)
         if (used >= DAILY_ASK_CAP) {
           return new Response(JSON.stringify({ error: `today's demo budget (${DAILY_ASK_CAP} answered questions) is spent — the citation-verifier tab still works, and the budget resets at midnight UTC` }), { status: 429, headers: cors })
         }
         if (env.ASK_GUARD) await env.ASK_GUARD.put(day, String(used + 1), { expirationTtl: 2 * 86400 })
-        const out = await answer(env, question)
-        if (env.ASK_GUARD) await env.ASK_GUARD.put(qKey, JSON.stringify(out), { expirationTtl: CACHE_TTL })
+        let out
+        try {
+          out = await answer(env, question)
+        } catch (e) {
+          if (env.ASK_GUARD) ctx.waitUntil(env.ASK_GUARD.put(day, String(used), { expirationTtl: 2 * 86400 })) // refund
+          throw e
+        }
+        // cache write off the response path; degraded answers expire fast, infra outages never cache
+        if (env.ASK_GUARD && !out.infraDown) {
+          const ttl = (out.claims || []).length ? CACHE_TTL : CACHE_TTL_DEGRADED
+          ctx.waitUntil(env.ASK_GUARD.put(qKey, JSON.stringify(out), { expirationTtl: ttl }))
+        }
+        if (!env.ASK_GUARD) out.limitsNote = 'cache/budget disabled: KV binding missing' // fail-open must be visible
         return new Response(JSON.stringify(out), { headers: cors })
       }
       if (url.pathname === '/api/verify' && request.method === 'POST') {
