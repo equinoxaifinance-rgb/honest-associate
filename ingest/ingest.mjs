@@ -101,7 +101,8 @@ while (url && done + skipped + failed < MAX * 2 && failStreak < 10) {
         precedentialStatus: r.status || 'Published',
         judges: r.judge || '',
         summary: String(summary).replace(/<[^>]+>/g, ' ').slice(0, 2000),
-        fullText: fullText.slice(0, 150000),
+        // 500k cap (was 150k — that cut dissents off 29 big opinions, caught+repaired 2026-09-25)
+        fullText: fullText.slice(0, 500000),
         courtListenerId: clusterId,
         absoluteUrl: `https://www.courtlistener.com${r.absolute_url}`,
       })

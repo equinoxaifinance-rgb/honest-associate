@@ -34,6 +34,12 @@ const MAX_SEARCHES = 4         // seek-before-no budget
 const ANSWER_BUDGET = 3000     // response-token budget — 1500 truncated 6-claim answers mid-JSON (measured 2026-09-23)
 const DAILY_ASK_CAP = 150      // global answered-questions/day (KV-backed; the per-IP limiter is per-isolate and resets)
 const CACHE_TTL = 7 * 86400    // identical questions serve the stored verified answer for $0
+const EVIDENCE_DOCS = 4        // opinions read per question
+// Dynamic evidence budget (2026-09-25, Bryan: "truncation doesnt become a factor"): short opinions
+// go in FULL; the shared budget's leftovers flow to the giants. Equal 28k slices cut EVERY big
+// opinion (dissents live at the end); dynamic allocation makes truncation the rare exception.
+const TOTAL_EVIDENCE_CHARS = 360000  // ~90k tokens ≈ 9¢/ask at Haiku list price (Bryan 2026-09-25: "truncation doesnt become a factor")
+const MIN_SLICE = 20000              // no doc gets starved below this
 
 // ---------- Sanity data access (GROQ over the HTTP API) ----------
 async function groq(env, query, params = {}) {
@@ -181,15 +187,38 @@ async function answer(env, question) {
   const { tried, hits } = await seek(env, question)
 
   const evidenceById = {}
-  for (const h of hits.slice(0, 4)) {
+  for (const h of hits.slice(0, EVIDENCE_DOCS)) {
     const full = await getFullOpinion(env, h.courtListenerId)
     if (full) evidenceById[h.courtListenerId] = full
   }
 
-  const evidenceBlock = Object.entries(evidenceById)
-    // de-hyphenate the hard-wrapped source so the model can quote clean contiguous spans
-    .map(([id, e]) => `<opinion courtListenerId="${id}" case="${e.caseName}" court="${e.court}" filed="${e.dateFiled}" status="${e.precedentialStatus}">\n${String(e.fullText).replace(/([A-Za-z])-\s*\n\s*(?=[a-z])/g, '$1').slice(0, 28000)}\n</opinion>`)
-    .join('\n\n')
+  // NO SILENT CAPS (law): dynamic allocation first (small docs FULL, leftovers to the giants),
+  // and any remaining truncation is counted and DISCLOSED — a cut opinion must never read as "the corpus
+  // doesn't address it" (dissents live at the END; caught 2026-09-25 when a gap note blamed the
+  // corpus for our own equal-slice cut).
+  const docs = Object.entries(evidenceById).map(([id, e]) => ({ id, e, clean: String(e.fullText).replace(/([A-Za-z])-\s*\n\s*(?=[a-z])/g, '$1') }))
+  docs.sort((a, b) => a.clean.length - b.clean.length) // smallest first: they take only what they need
+  let remaining = TOTAL_EVIDENCE_CHARS
+  let truncatedCount = 0
+  const parts = []
+  for (let i = 0; i < docs.length; i++) {
+    const d = docs[i]
+    const fair = Math.max(MIN_SLICE, Math.floor(remaining / (docs.length - i)))
+    const alloc = Math.min(d.clean.length, fair)
+    remaining -= alloc
+    const cut = d.clean.length > alloc
+    if (cut) truncatedCount++
+    // head+tail windowing on cut docs: dissents/concurrences live at the END of an opinion, so a
+    // cut doc keeps its opening AND its ending — only the MIDDLE is omitted, and loudly.
+    const body = cut
+      ? `${d.clean.slice(0, Math.floor(alloc * 0.6))}\n\n[... MIDDLE OF OPINION OMITTED (${d.clean.length - alloc} chars) — text below resumes near the end of the document, where concurrences and dissents appear ...]\n\n${d.clean.slice(d.clean.length - Math.floor(alloc * 0.4))}`
+      : d.clean
+    parts.push(`<opinion courtListenerId="${d.id}" case="${d.e.caseName}" court="${d.e.court}" filed="${d.e.dateFiled}" status="${d.e.precedentialStatus}"${cut ? ' middleOmitted="true — opening and ending included; do not quote across the omission marker"' : ''}>\n${body}\n</opinion>`)
+  }
+  const evidenceBlock = parts.join('\n\n')
+  const evidenceNote = truncatedCount
+    ? `${docs.length - truncatedCount} of ${docs.length} opinions read in full; ${truncatedCount} read head+tail (middle omitted, endings incl. dissents in-window)`
+    : `all ${docs.length} opinions read in full`
 
   const system = `You are the Honest Associate, a legal research aid answering ONLY from the court opinions provided in <opinion> blocks. Rules (mechanically enforced downstream — violations are rejected):
 1. Every claim about a case must include a verbatim quote from that opinion (15+ words) in the "quote" field, plus the "courtListenerId" copied from that opinion's courtListenerId attribute. Copy the quote as ONE exact contiguous span — change no words, fix no grammar, no ellipses, never stitch two passages together.
@@ -265,7 +294,7 @@ Respond ONLY with JSON: {"claims":[{"grade":"DIRECT_QUOTE|SUPPORTED|RELATED","st
     if (ev) { c.absoluteUrl = ev.absoluteUrl; c.court = ev.court; c.dateFiled = ev.dateFiled; c.precedentialStatus = ev.precedentialStatus }
   }
 
-  return { banner, searchesTried: tried, evidenceCount: Object.keys(evidenceById).length, enforcementFired: enforced, ...out }
+  return { banner, searchesTried: tried, evidenceCount: Object.keys(evidenceById).length, evidenceNote, enforcementFired: enforced, ...out }
 }
 
 // ---------- The citation-verifier route (the demo button) ----------
