@@ -134,8 +134,9 @@ const safeUrl = (u) => /^https:\/\/(www\.)?courtlistener\.com\//.test(String(u??
 const srcLink = (u, label) => { const s = safeUrl(u); return s ? `<a class="src" href="${s}" target="_blank" rel="noopener">${label}</a>` : '' }
 
 fetch('/api/banner').then(r=>r.json()).then(b=>{
-  if(!b) return
-  $('#banner').innerHTML = `<b>Corpus on file:</b> ${Number(b.opinionCount) || 0} opinions · ${(b.courtsCovered||[]).map(esc).join(' + ')} · ${esc(b.dateRangeStart)} → ${esc(b.dateRangeEnd)} · source: ${esc(b.source)}<br>${esc(b.disclaimer)}`
+  // an error body or missing doc must NEVER render as a confident "0 opinions" banner
+  if(!b || b.error || !Number(b.opinionCount)) throw new Error('banner unavailable')
+  $('#banner').innerHTML = `<b>Corpus on file:</b> ${Number(b.opinionCount)} opinions · ${(b.courtsCovered||[]).map(esc).join(' + ')} · ${esc(b.dateRangeStart)} → ${esc(b.dateRangeEnd)} · source: ${esc(b.source)}<br>${esc(b.disclaimer)}`
 }).catch(()=>{ $('#banner').textContent = 'Banner unavailable — treat all results with extra suspicion.' })
 
 document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
