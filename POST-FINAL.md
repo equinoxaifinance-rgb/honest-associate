@@ -123,6 +123,15 @@ confirmed by independent reviewers, and the fixes shipped the same night.
 Excerpts of the verifier catching the model mid-fabrication, with unedited logs:
 https://github.com/equinoxaifinance-rgb/honest-associate/blob/main/docs/agent-session-excerpt.md
 
+## Why I Built This
+
+Truthfully, we built this for a competition. But the design came from something real: I'm not a
+lawyer and I'm not a trained developer — I can't personally check whether an AI is telling me the
+truth. So the rule I gave this project was simple: don't just refuse to answer — become something
+a lawyer can actually trust, and if you can't prove it, don't say it. Halfway through, I asked one
+question that became the whole entry: turn the safety layer off and see if it makes things up. It
+did — 18 times in 50 runs. That's why the trust here isn't a promise in a prompt. It's code.
+
 ---
 
 **Honest limits, so you don't have to hunt for them:** the corpus is a bounded snapshot (SCOTUS +
