@@ -18,7 +18,7 @@ makes it trustworthy is mechanical:
 | Organ | What it does |
 |---|---|
 | **Bounded corpus** | 350+ real published opinions (SCOTUS + Fourth Circuit) ingested from [CourtListener](https://www.courtlistener.com/) (Free Law Project, public domain) into Sanity. The UI banner (count, courts, date range) is written by a census script from measured data-layer values — never typed by hand. |
-| **Context MCP retrieval** | Searches run through the [Sanity Context](https://www.sanity.io/docs/context) MCP endpoint (`groq_query` tool). Every response tags its searches `[via context-mcp]`; direct GROQ exists only as a *disclosed* fallback. |
+| **Three retrieval lanes, all disclosed** | Semantic recall via a Sanity **embeddings index** over the full corpus (a paraphrase like "the order ending birthright citizenship" finds *Trump v. CASA* with zero case-name words), plus keyword search through the [Sanity Context](https://www.sanity.io/docs/context) MCP endpoint (`groq_query` tool) — every response tags each search `[via embeddings-index]` / `[via context-mcp]`; direct GROQ is the *disclosed* fallback. Document fetch and the banner use the Sanity HTTP API. |
 | **Mechanical quote verification** | Every claim must carry a verbatim quote. A string matcher (whitespace/hyphenation-forgiving, word-substitution-merciless) checks it against the stored opinion text. Fail → one retry with violations named → still failing → the claim is stripped. |
 | **Withheld summaries** | If zero claims survive verification, the summary is withheld — an unsupported answer never wears the tool's credibility. |
 | **Server-attached sources** | CourtListener links come from the database record, never from model output. The model cannot invent a URL. |
@@ -35,15 +35,20 @@ mechanical layer **enforce**, or just observe?
 | Fabricated/altered quotes reaching the user | **18** | **0** |
 | Runs with ≥1 fabrication shipped | **11 / 50 (22%)** | **0 / 50** |
 
-Without enforcement, the model shipped "quotes" from *Yoder* and *W.Va. Bd. of Ed. v. Barnette* —
-real, famous cases it knows from training that were **not in the evidence it cited**. The written
-rule said "anything not in the evidence does not exist for you." It read the rule and broke it
-anyway. Prompt discipline is intermittent; the mechanical layer is not.
-Raw per-run receipts: `agent/ablation-results.jsonl`. Driver: `agent/test-ablation.mjs`.
+Without enforcement, the model shipped altered "quotes" — including spans invoking *Yoder* and
+*W.Va. Bd. of Ed. v. Barnette* (famous cases it knows from training) that do **not appear
+verbatim in the opinions it cited**. The written rule said copy exactly and never fill from
+memory. It broke it anyway — in 11 of 50 runs. Prompt discipline is intermittent; the mechanical
+layer is not. Raw per-run receipts: `agent/ablation-results.jsonl`. Driver: `agent/test-ablation.mjs`.
+Config disclosure: ablation ran at provider-default temperature (the live site's setting) with a
+4×12k-char evidence harness; both arms share the round-1 draft, so the comparison isolates
+enforcement exactly.
 
-We also swapped the engine for a free 4B local model (qwen3-4b on a consumer GPU) under the same
-wrap: thinner answers, 25× slower — and the same zero-fabrication floor. The trust layer is
-engine-agnostic; capability is a cost knob. Driver: `agent/test-engines.mjs`.
+In a smaller 4-question pilot we also swapped the engine for a free 4B local model (qwen3-4b on a
+consumer gaming GPU) under the same wrap: thinner answers (1 verified claim vs 5 on the same
+question), minutes instead of seconds — and the same zero-fabrication floor in every measured
+cell. Suggestive, not a benchmark: the trust floor traveled with the wrap, not the engine.
+Driver: `agent/test-engines.mjs`.
 
 ## Architecture
 
@@ -78,8 +83,12 @@ node test-battery.mjs && node test-live.mjs && node test-ablation.mjs
   circuit, state courts, and statutes — that's ingest scale, not new architecture.
 - Quote verification proves a quote exists in the cited opinion; it does not prove the *claim*
   fairly characterizes the opinion. Grades (DIRECT_QUOTE/SUPPORTED/RELATED) are model-assigned.
-- The Knowledge Base semantic layer covers the SCOTUS subset (free-tier document limit); the GROQ
-  lane covers the full corpus.
+- We tried Sanity's Knowledge Base layer and **deleted it**: the free tier indexes 150 documents
+  and even our 101-doc SCOTUS subset expanded to 402 indexed chunks. Instead, semantic recall runs
+  on a Sanity **embeddings index over all 350 opinions** (the challenge's sanctioned full-dataset
+  route), and the Context MCP endpoint serves the corpus in Dataset mode. KBs are the paid-tier
+  upgrade path, and we'd rather tell you that than gut the corpus to decorate a checkbox.
+- Opinions are stored up to a 500k-character cap (disclosed per answer when hit).
 - This is a research aid, not legal advice.
 
 Public-domain court data courtesy of the Free Law Project. Not affiliated with CourtListener.

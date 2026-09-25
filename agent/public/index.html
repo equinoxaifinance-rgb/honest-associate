@@ -86,6 +86,17 @@
   .foot { margin-top:34px; border-top:1px solid var(--line); padding-top:12px; color:var(--faded);
           font-size:.8rem; text-align:center; }
   #askOut, #verOut { counter-reset:exhibit; }
+  .how { border:1px solid var(--line); background:var(--paper2); padding:4px 18px 14px; margin-bottom:26px; font-size:.92rem; }
+  .how summary { cursor:pointer; font-variant:small-caps; letter-spacing:.08em; padding:10px 0; font-weight:bold; }
+  .how table { border-collapse:collapse; width:100%; margin:10px 0; }
+  .how td { border:1px solid var(--line); padding:7px 10px; vertical-align:top; }
+  .how td:first-child { font-variant:small-caps; white-space:nowrap; color:var(--exhibit-blue); }
+  .how .abl { font-family:Consolas,'Courier New',monospace; font-size:.82rem; background:#fffdf6;
+              border-left:3px solid var(--seal-green); padding:8px 12px; margin:8px 0; }
+  .receipt { margin-top:8px; font-size:.82rem; }
+  .receipt summary { cursor:pointer; color:var(--exhibit-blue); }
+  .receipt .ctx { background:#fffdf6; border:1px dashed var(--line); padding:8px 12px; margin-top:6px;
+                  font-family:Consolas,'Courier New',monospace; font-size:.78rem; color:#3a332a; }
 </style>
 </head>
 <body>
@@ -96,13 +107,28 @@
   </div>
   <div class="banner" id="banner">Loading corpus boundaries…</div>
 
+  <details class="how">
+    <summary>How this stays honest (the machinery)</summary>
+    <p>In 2023, lawyers were sanctioned for filing a brief of cases ChatGPT invented. This agent is built so that <b>cannot happen</b> — not because the model promises, but because the system checks:</p>
+    <table>
+      <tr><td>Bounded corpus</td><td>Real published opinions from CourtListener in a Sanity dataset. The banner above is written by a census script from measured values — never typed by hand.</td></tr>
+      <tr><td>Mechanical quote check</td><td>Every claim must carry a verbatim quote. Code — not the model — verifies it exists letter-for-letter in <i>both</i> the text the model was shown <i>and</i> the stored opinion. Failures are rejected and stripped.</td></tr>
+      <tr><td>Withheld summaries</td><td>If zero claims survive verification, no summary is shown. An unsupported answer never wears this tool's credibility.</td></tr>
+      <tr><td>Server-truth labels</td><td>Case names, dates, courts, and links come from the database record — the model cannot invent a URL or mislabel a case.</td></tr>
+      <tr><td>Honest edges</td><td>"Not in corpus" means not in THIS collection, never that no authority exists. Gaps say what the corpus can't answer; truncation is disclosed per answer.</td></tr>
+    </table>
+    <div class="abl">Ablation, 50 runs per arm, same model/prompt/evidence — enforcement OFF: 18 fabricated quotes shipped (11/50 runs dirty). Enforcement ON: 0.</div>
+    <p><b>Try it yourself:</b> the verify tab's "infamous fake case" chip is <i>Varghese v. China Southern Airlines</i> — the actual fabricated case from the sanctions story. Every AI chatbot will summarize it for you. This one structurally can't.</p>
+    <p class="meta">Grades: <b>DIRECT_QUOTE</b> = the quote itself answers · <b>SUPPORTED</b> = fair paraphrase, quote shown · <b>RELATED</b> = adjacent context, not the answer.</p>
+  </details>
+
   <div class="tabs">
     <button class="tab active" data-t="ask">Ask a question</button>
     <button class="tab" data-t="verify">Verify a citation</button>
   </div>
 
   <div class="card" id="pane-ask">
-    <textarea id="q" placeholder="Ask what these courts actually held — or tap a sample below"></textarea>
+    <textarea id="q" aria-label="Your legal research question" placeholder="Ask what these courts actually held — or tap a sample below"></textarea>
     <div class="chips">
       <span class="meta">Try one:</span>
       <button class="chip" data-q="What did the Supreme Court hold about universal injunctions?">Universal injunctions</button>
@@ -110,18 +136,18 @@
       <button class="chip" data-q="What has the Fourth Circuit said about felons possessing firearms?">Felons &amp; firearms</button>
     </div>
     <button class="go" id="askBtn">Search the corpus</button>
-    <div class="out" id="askOut"></div>
+    <div class="out" id="askOut" aria-live="polite"></div>
   </div>
 
   <div class="card" id="pane-verify" style="display:none">
-    <input type="text" id="cite" placeholder="Paste any case name or citation">
+    <input type="text" id="cite" aria-label="Case name or citation to verify" placeholder="Paste any case name or citation">
     <div class="chips">
       <span class="meta">Try one:</span>
       <button class="chip" data-c="United States v. Stephen Snyder">A real case we hold</button>
       <button class="chip" data-c="Varghese v. China Southern Airlines Co., 925 F.3d 1339 (11th Cir. 2019)">The infamous fake case</button>
     </div>
     <button class="go" id="verBtn">Verify against the corpus</button>
-    <div class="out" id="verOut"></div>
+    <div class="out" id="verOut" aria-live="polite"></div>
   </div>
 
   <div class="foot">Corpus: real published opinions via CourtListener / Free Law Project (public domain) · retrieval via Sanity Context MCP · a research aid, not legal advice</div>
@@ -152,10 +178,21 @@ document.querySelectorAll('.chip').forEach(ch=>ch.onclick=()=>{
   if(ch.dataset.c){ $('#cite').value = ch.dataset.c; $('#verBtn').click() }
 })
 
+// deep links: ?q= runs a question, ?cite= runs a verification — shareable/cache-warm demos
+const params = new URLSearchParams(location.search)
+if(params.get('cite')){
+  document.querySelector('.tab[data-t="verify"]').click()
+  $('#cite').value = params.get('cite').slice(0,200)
+  setTimeout(()=>$('#verBtn').click(), 300)
+} else if(params.get('q')){
+  $('#q').value = params.get('q').slice(0,500)
+  setTimeout(()=>$('#askBtn').click(), 300)
+}
+
 $('#askBtn').onclick = async () => {
   const q = $('#q').value.trim(); if(!q) return
   $('#askBtn').disabled = true
-  $('#askOut').innerHTML = '<div class="spin">Seeking — multiple query shapes against 350 real opinions…</div>'
+  $('#askOut').innerHTML = '<div class="spin">Seeking — semantic + keyword lanes over the corpus… (uncached questions take ~20–40 seconds; the verifier reads whole opinions)</div>'
   try {
     const r = await fetch('/api/ask',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({question:q})})
     const d = await r.json()
@@ -169,6 +206,7 @@ $('#askBtn').onclick = async () => {
         <div class="body">
           <div>${esc(c.statement)}</div>
           <div class="quote">“${esc(c.quote)}”</div>
+          ${c.context ? `<details class="receipt"><summary>see it in the opinion (verification receipt)</summary><div class="ctx">${esc(c.context)}</div></details>` : ''}
           <div class="src">${srcLink(c.absoluteUrl, 'source: CourtListener ↗')}</div>
         </div>
       </div>`

@@ -144,7 +144,9 @@ function verifyQuotes(claims, verifyMap) {
     const ev = verifyMap[c.courtListenerId]
     if (!ev) { violations.push({ claim: c, why: 'cites a document not in the evidence set' }); continue }
     const needle = squeeze(c.quote)
-    if (needle.length < 20) { violations.push({ claim: c, why: 'quote too short to verify' }); continue }
+    // 60 squeezed chars ≈ the prompt's own 15-word floor — 20 let boilerplate spans like
+    // "the district court granted" pass as "verification" (audit S6)
+    if (needle.length < 60) { violations.push({ claim: c, why: 'quote too short to verify (need 15+ words)' }); continue }
     if (!ev.sqShown.includes(needle)) { violations.push({ claim: c, why: 'quote not found in the evidence text you were shown' }); continue }
     if (!ev.sqFull.includes(needle)) violations.push({ claim: c, why: 'quote does not appear contiguously in the opinion (do not quote across the omission marker)' })
   }
@@ -188,7 +190,9 @@ async function seek(env, question) {
     try {
       const hits = await searchOpinions(env, q, 5)
       tried.push(`${q} [via ${hits.lane || '?'}]`)
-      for (const h of hits || []) if (h && !keyword.has(h.courtListenerId)) keyword.set(h.courtListenerId, h)
+      // zero-score rows are arbitrary tail — shipping them as evidence costs ~9¢ of full opinions
+      // on no-match questions and dilutes real hits (audit S5; mirrors the verifyCitation filter)
+      for (const h of hits || []) if (h && (h._score || 0) > 0 && !keyword.has(h.courtListenerId)) keyword.set(h.courtListenerId, h)
     } catch (e) { lanesFailed++; tried.push(`${q} [search failed: ${String(e.message).slice(0, 40)}]`) }
   }
   const runSemantic = async () => {
@@ -243,6 +247,7 @@ async function answer(env, question) {
   let truncatedCount = 0, storageCapped = 0
   const parts = []
   const verifyMap = {} // per-doc squeezed text, computed ONCE (CPU audit: per-claim recompute on 500k strings)
+  const cleanById = {} // original cleaned text, for on-page verification receipts (audit M7)
   for (let i = 0; i < docs.length; i++) {
     const d = docs[i]
     const fair = Math.max(MIN_SLICE, Math.floor(remaining / (docs.length - i)))
@@ -259,6 +264,7 @@ async function answer(env, question) {
     // DUAL-CHECK verification map (audit): sqShown = what the model was actually handed;
     // sqFull = the whole stored opinion. A quote must live in BOTH.
     verifyMap[Number(d.id)] = { sqShown: squeeze(body), sqFull: squeeze(d.clean) }
+    cleanById[Number(d.id)] = d.clean
     parts.push(`<opinion courtListenerId="${d.id}" case="${d.e.caseName}" court="${d.e.court}" filed="${d.e.dateFiled}" status="${d.e.precedentialStatus}"${cut ? ' middleOmitted="true — opening and ending included; do not quote across the omission marker"' : ''}>\n${body}\n</opinion>`)
   }
   const evidenceBlock = parts.join('\n\n')
@@ -350,6 +356,20 @@ Respond ONLY with JSON: {"claims":[{"grade":"DIRECT_QUOTE|SUPPORTED|RELATED","st
   for (const c of out.claims || []) {
     const ev = evidenceById[c.courtListenerId]
     if (ev) { c.caseName = ev.caseName; c.absoluteUrl = ev.absoluteUrl; c.court = ev.court; c.dateFiled = ev.dateFiled; c.precedentialStatus = ev.precedentialStatus }
+    // on-page receipt (audit M7): locate the verified quote in the opinion and ship surrounding
+    // context, so "machine-verified" is inspectable, not asserted. Whitespace-flexible match on
+    // the quote's opening words; absence of a receipt never blocks a verified claim.
+    const clean = cleanById[c.courtListenerId]
+    if (clean && c.quote) {
+      try {
+        const words = String(c.quote).split(/\s+/).filter(Boolean).slice(0, 8).map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+        const mres = words.length >= 4 ? new RegExp(words.join('[\\s\\S]{0,3}'), 'i').exec(clean) : null
+        if (mres) {
+          const start = Math.max(0, mres.index - 150)
+          c.context = (start > 0 ? '…' : '') + clean.slice(start, mres.index + String(c.quote).length + 150).trim() + '…'
+        }
+      } catch {}
+    }
   }
 
   // model fields WHITELISTED — spread-order audit: model JSON must never overwrite server truth
@@ -364,11 +384,20 @@ async function verifyCitation(env, input) {
   // pure-punctuation pasted → includes('') matched the first arbitrary row → false green stamp)
   const nameMatchable = nq.length >= 10
   const byCite = await groq(env, `*[_type == "opinion" && $q in citations][0]{ caseName, citations, court, dateFiled, absoluteUrl, courtListenerId, "excerpt": summary }`, { q })
-  // some ingested docs have an empty search snippet — fall back to the opinion's own opening text
+  // some ingested docs have an empty search snippet — fall back to the opinion's own text,
+  // SKIPPING docket-caption boilerplate ("USCA4 Appeal: 25-4218 Doc: 58…") so the receipt a
+  // judge sees is prose, not filing metadata (audit M2)
   const withExcerpt = async (m) => {
     if (!m.excerpt) {
       const full = await getFullOpinion(env, m.courtListenerId)
-      if (full) m.excerpt = String(full.fullText || '').slice(0, 400)
+      if (full) {
+        // CourtListener plain text hard-wraps ~80 chars/line — paragraphs are blank-line blocks,
+        // so split on blank lines, un-wrap each block, and take the first real prose paragraph
+        const paras = String(full.fullText || '').split(/\n\s*\n/)
+          .map((p) => p.replace(/USCA4 Appeal:.*?Pg: \d+ of \d+/g, ' ').replace(/\s+/g, ' ').trim())
+        const prose = paras.find((p) => p.length > 150 && !/^(\d|USCA4|PUBLISHED|UNPUBLISHED|UNITED STATES|No\.\s|Nos?\.\s|Appeal:|Doc:|Filed:|Pg:|Plaintiff|Defendant|Argued:|Decided:|Present:|Appeal from|On Writ|Syllabus|NOTE:)/i.test(p))
+        m.excerpt = (prose || paras.find((p) => p.length > 80) || String(full.fullText || '').replace(/\s+/g, ' ')).trim().slice(0, 400)
+      }
     }
     return m
   }
@@ -429,6 +458,11 @@ export default {
       }
       if (url.pathname === '/api/ask' && request.method === 'POST') {
         if (rateLimited(ip)) return new Response(JSON.stringify({ error: 'rate limit — try again in a few minutes' }), { status: 429, headers: cors })
+        // 415 on non-JSON content types forces a CORS preflight — closes the no-preflight
+        // drive-by POST lane from hostile pages (audit S2)
+        if (!String(request.headers.get('content-type') || '').includes('application/json')) {
+          return new Response(JSON.stringify({ error: 'content-type must be application/json' }), { status: 415, headers: cors })
+        }
         const { question } = await request.json()
         // typeof guard (audit: {"question":42} passed validation and burned a budget slot on a crash)
         if (typeof question !== 'string' || !question.trim() || question.length > MAX_Q) {
@@ -451,18 +485,20 @@ export default {
         if (used >= DAILY_ASK_CAP) {
           return new Response(JSON.stringify({ error: `today's demo budget (${DAILY_ASK_CAP} answered questions) is spent — the citation-verifier tab still works, and the budget resets at midnight UTC` }), { status: 429, headers: cors })
         }
-        if (env.ASK_GUARD) await env.ASK_GUARD.put(day, String(used + 1), { expirationTtl: 2 * 86400 })
+        // KV puts individually guarded (audit S4: the 1-write/sec/key limit must never 500 an
+        // answered request, and a failed bookkeeping write must never discard a paid answer)
+        if (env.ASK_GUARD) await env.ASK_GUARD.put(day, String(used + 1), { expirationTtl: 2 * 86400 }).catch(() => {})
         let out
         try {
           out = await answer(env, question)
         } catch (e) {
-          if (env.ASK_GUARD) ctx.waitUntil(env.ASK_GUARD.put(day, String(used), { expirationTtl: 2 * 86400 })) // refund
+          if (env.ASK_GUARD) ctx.waitUntil(env.ASK_GUARD.put(day, String(used), { expirationTtl: 2 * 86400 }).catch(() => {})) // refund
           throw e
         }
         // cache write off the response path; degraded answers expire fast, infra outages never cache
         if (env.ASK_GUARD && !out.infraDown) {
           const ttl = (out.claims || []).length ? CACHE_TTL : CACHE_TTL_DEGRADED
-          ctx.waitUntil(env.ASK_GUARD.put(qKey, JSON.stringify(out), { expirationTtl: ttl }))
+          ctx.waitUntil(env.ASK_GUARD.put(qKey, JSON.stringify(out), { expirationTtl: ttl }).catch(() => {}))
         }
         if (!env.ASK_GUARD) out.limitsNote = 'cache/budget disabled: KV binding missing' // fail-open must be visible
         return new Response(JSON.stringify(out), { headers: cors })
