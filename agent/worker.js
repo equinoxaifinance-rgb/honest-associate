@@ -132,6 +132,24 @@ function verifyQuotes(claims, evidenceById) {
   return violations
 }
 
+// ---------- Organ: semantic lane (Sanity embeddings-index over the full corpus) ----------
+// Catches paraphrases keyword `match` misses ("executive order ending birthright citizenship"
+// -> Trump v. CASA by meaning, measured 2026-09-25). Non-fatal: an error is disclosed, never silent.
+async function semanticSearch(env, question, limit = 3) {
+  const res = await fetch(`https://${SANITY_PROJECT}.api.sanity.io/vX/embeddings-index/query/${SANITY_DATASET}/opinions-index`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${env.SANITY_CONTEXT_TOKEN}` },
+    body: JSON.stringify({ query: question, maxResults: limit }),
+    signal: AbortSignal.timeout(15000),
+  })
+  if (!res.ok) throw new Error(`embeddings ${res.status}`)
+  const rows = await res.json()
+  return (rows || [])
+    .map((r) => /^opinion-cl-(\d+)$/.exec(String(r.value?.documentId || '')))
+    .filter(Boolean)
+    .map((m) => ({ courtListenerId: Number(m[1]), caseName: '(semantic hit)' }))
+}
+
 // ---------- Organ: seek-before-no ----------
 async function seek(env, question) {
   const tried = []
@@ -140,6 +158,12 @@ async function seek(env, question) {
   const words = question.split(/\s+/).filter((w) => w.length > 3)
   if (words.length > 2) queries.push(words.slice(0, 6).join(' '))
   if (words.length > 4) queries.push(words.slice(-5).join(' '))
+  // semantic lane first: meaning-based recall over all 350 opinions via the embeddings index
+  try {
+    const sem = await semanticSearch(env, question, 3)
+    tried.push(`semantic [via embeddings-index: ${sem.length} hits]`)
+    for (const h of sem) if (!seen.has(h.courtListenerId)) seen.set(h.courtListenerId, h)
+  } catch (e) { tried.push(`semantic [embeddings unavailable: ${String(e.message).slice(0, 30)}]`) }
   for (const q of queries.slice(0, MAX_SEARCHES)) {
     try {
       const hits = await searchOpinions(env, q, 5)
