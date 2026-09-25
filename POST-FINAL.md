@@ -123,10 +123,6 @@ confirmed by independent reviewers, and the fixes shipped the same night.
 Excerpts of the verifier catching the model mid-fabrication, with unedited logs:
 https://github.com/equinoxaifinance-rgb/honest-associate/blob/main/docs/agent-session-excerpt.md
 
-## [BRYAN — WHY I BUILT THIS]
-
-[3–5 sentences in your own words. Placeholder — replaced verbatim with what you send.]
-
 ---
 
 **Honest limits, so you don't have to hunt for them:** the corpus is a bounded snapshot (SCOTUS +
