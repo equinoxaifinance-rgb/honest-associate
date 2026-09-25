@@ -1,0 +1,10 @@
+{
+  "name": "honest-associate-ingest",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "description": "CourtListener -> Sanity ingest for the Honest Associate corpus",
+  "dependencies": {
+    "@sanity/client": "^7.0.0"
+  }
+}

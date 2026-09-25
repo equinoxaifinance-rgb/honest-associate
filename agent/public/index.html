@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Honest Associate — legal research that can't invent a case</title>
+<style>
+  /* Court-document paper: deliberately NOT another dark dashboard. Cream stock, ink text,
+     rubber-stamp verdicts, exhibit-numbered claims. The look argues the thesis. */
+  :root { --paper:#f5f0e4; --paper2:#efe8d8; --ink:#211d19; --faded:#6d6355; --line:#c9bda6;
+          --stamp-red:#9c2121; --seal-green:#1e5c3a; --exhibit-blue:#1f4e79; --amber:#8a6d1f; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--paper); color:var(--ink);
+         font:17px/1.6 Georgia, 'Times New Roman', serif;
+         background-image:repeating-linear-gradient(0deg, transparent, transparent 31px, rgba(120,100,70,.045) 32px); }
+  .wrap { max-width:860px; margin:0 auto; padding:36px 22px 90px; }
+
+  .masthead { text-align:center; border-bottom:3px double var(--ink); padding-bottom:18px; margin-bottom:18px; }
+  .masthead h1 { font-size:2.1rem; letter-spacing:.14em; font-variant:small-caps; }
+  .masthead .tag { color:var(--faded); font-style:italic; margin-top:4px; }
+
+  .banner { border:1px solid var(--line); background:var(--paper2); padding:12px 18px;
+            font-size:.86rem; color:var(--faded); margin-bottom:26px; }
+  .banner b { color:var(--ink); font-variant:small-caps; letter-spacing:.06em; }
+
+  .tabs { display:flex; gap:0; margin-bottom:-1px; }
+  .tab { padding:10px 22px; border:1px solid var(--line); border-bottom:none; background:var(--paper2);
+         color:var(--faded); cursor:pointer; font-size:.95rem; font-family:inherit;
+         border-radius:8px 8px 0 0; margin-right:6px; }
+  .tab.active { background:#fffdf6; color:var(--ink); font-weight:bold;
+                box-shadow:0 -2px 0 var(--exhibit-blue) inset; }
+
+  .card { background:#fffdf6; border:1px solid var(--line); padding:24px; box-shadow:2px 3px 0 rgba(60,45,20,.08); }
+  textarea, input[type=text] { width:100%; background:#fffdf6; color:var(--ink); border:1px solid var(--line);
+         border-left:3px solid var(--exhibit-blue); padding:12px; font-size:1.02rem; font-family:inherit; }
+  textarea { min-height:80px; resize:vertical; }
+  textarea:focus, input:focus { outline:2px solid var(--exhibit-blue); outline-offset:-1px; }
+
+  .chips { display:flex; gap:8px; align-items:center; flex-wrap:wrap; margin-top:12px; }
+  .chips .meta { font-style:italic; }
+  .chip { background:var(--paper2); color:var(--ink); border:1px solid var(--line); border-radius:3px;
+          padding:5px 14px; font-size:.85rem; cursor:pointer; font-family:inherit;
+          box-shadow:1px 1px 0 rgba(60,45,20,.15); }
+  .chip:hover { background:#fffdf6; border-color:var(--exhibit-blue); color:var(--exhibit-blue); }
+
+  button.go { margin-top:14px; background:var(--ink); color:var(--paper); border:none;
+              padding:11px 26px; font-size:1rem; cursor:pointer; font-family:inherit;
+              letter-spacing:.08em; font-variant:small-caps; }
+  button.go:hover { background:var(--exhibit-blue); }
+  button.go:disabled { opacity:.5; cursor:wait; }
+
+  .out { margin-top:22px; display:flex; flex-direction:column; gap:16px; }
+  .summary { font-size:1.05rem; border-left:3px solid var(--ink); padding-left:14px; }
+
+  .claim { counter-increment:exhibit; border:1px solid var(--line); background:#fffdf6;
+           padding:0; box-shadow:2px 2px 0 rgba(60,45,20,.07); }
+  .claim .grade { font-family:Consolas, 'Courier New', monospace; font-size:.7rem; letter-spacing:.1em;
+                  padding:6px 14px; border-bottom:1px solid var(--line); color:var(--faded);
+                  background:var(--paper2); text-transform:uppercase; }
+  .claim .grade::before { content:"Exhibit " counter(exhibit) " · "; color:var(--exhibit-blue); font-weight:bold; }
+  .claim.DIRECT_QUOTE .grade { border-left:4px solid var(--seal-green); }
+  .claim.SUPPORTED .grade { border-left:4px solid var(--exhibit-blue); }
+  .claim.RELATED .grade { border-left:4px solid var(--amber); }
+  .claim .body { padding:12px 16px 14px; }
+  .quote { margin:10px 0 8px; padding:10px 14px; background:var(--paper2);
+           font-family:Consolas, 'Courier New', monospace; font-size:.86rem; color:#3a332a;
+           border-left:3px solid var(--seal-green); }
+  .src { font-size:.84rem; }
+  .src a { color:var(--exhibit-blue); }
+
+  .stamp { display:inline-block; font-family:Consolas, 'Courier New', monospace; font-weight:bold;
+           font-size:1.5rem; letter-spacing:.18em; padding:10px 22px; transform:rotate(-3deg);
+           border:4px double currentColor; border-radius:4px; text-transform:uppercase;
+           animation:thunk .18s ease-out; margin:6px 0 10px; }
+  @keyframes thunk { 0%{transform:rotate(-3deg) scale(1.6); opacity:0} 100%{transform:rotate(-3deg) scale(1); opacity:1} }
+  .stamp.no { color:var(--stamp-red); }
+  .stamp.yes { color:var(--seal-green); }
+  .verdict { padding:16px 6px 6px; }
+  .verdict .note { color:var(--faded); font-size:.95rem; }
+
+  .gap { border:1px dashed var(--amber); padding:12px 16px; color:var(--amber); font-size:.94rem;
+         background:rgba(138,109,31,.05); }
+  .enforce { font-family:Consolas, 'Courier New', monospace; font-size:.78rem; color:var(--amber); }
+  .meta { color:var(--faded); font-size:.82rem; }
+  .spin { color:var(--faded); font-style:italic; }
+  .foot { margin-top:34px; border-top:1px solid var(--line); padding-top:12px; color:var(--faded);
+          font-size:.8rem; text-align:center; }
+  #askOut, #verOut { counter-reset:exhibit; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="masthead">
+    <h1>Honest Associate</h1>
+    <div class="tag">Legal research that shows its receipts — every claim quoted, every quote machine-verified, every miss admitted.</div>
+  </div>
+  <div class="banner" id="banner">Loading corpus boundaries…</div>
+
+  <div class="tabs">
+    <button class="tab active" data-t="ask">Ask a question</button>
+    <button class="tab" data-t="verify">Verify a citation</button>
+  </div>
+
+  <div class="card" id="pane-ask">
+    <textarea id="q" placeholder="Ask what these courts actually held — or tap a sample below"></textarea>
+    <div class="chips">
+      <span class="meta">Try one:</span>
+      <button class="chip" data-q="What did the Supreme Court hold about universal injunctions?">Universal injunctions</button>
+      <button class="chip" data-q="What protections apply to religious exercise in schools?">Religion in schools</button>
+      <button class="chip" data-q="What has the Fourth Circuit said about felons possessing firearms?">Felons &amp; firearms</button>
+    </div>
+    <button class="go" id="askBtn">Search the corpus</button>
+    <div class="out" id="askOut"></div>
+  </div>
+
+  <div class="card" id="pane-verify" style="display:none">
+    <input type="text" id="cite" placeholder="Paste any case name or citation">
+    <div class="chips">
+      <span class="meta">Try one:</span>
+      <button class="chip" data-c="United States v. Stephen Snyder">A real case we hold</button>
+      <button class="chip" data-c="Varghese v. China Southern Airlines Co., 925 F.3d 1339 (11th Cir. 2019)">The infamous fake case</button>
+    </div>
+    <button class="go" id="verBtn">Verify against the corpus</button>
+    <div class="out" id="verOut"></div>
+  </div>
+
+  <div class="foot">Corpus: real published opinions via CourtListener / Free Law Project (public domain) · retrieval via Sanity Context MCP · a research aid, not legal advice</div>
+</div>
+<script>
+const $ = (s) => document.querySelector(s)
+const esc = (s) => String(s??'').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))
+// hrefs render ONLY for CourtListener https URLs — escaping alone doesn't stop javascript: schemes
+const safeUrl = (u) => /^https:\/\/(www\.)?courtlistener\.com\//.test(String(u??'')) ? esc(u) : ''
+const srcLink = (u, label) => { const s = safeUrl(u); return s ? `<a class="src" href="${s}" target="_blank" rel="noopener">${label}</a>` : '' }
+
+fetch('/api/banner').then(r=>r.json()).then(b=>{
+  if(!b) return
+  $('#banner').innerHTML = `<b>Corpus on file:</b> ${Number(b.opinionCount) || 0} opinions · ${(b.courtsCovered||[]).map(esc).join(' + ')} · ${esc(b.dateRangeStart)} → ${esc(b.dateRangeEnd)} · source: ${esc(b.source)}<br>${esc(b.disclaimer)}`
+}).catch(()=>{ $('#banner').textContent = 'Banner unavailable — treat all results with extra suspicion.' })
+
+document.querySelectorAll('.tab').forEach(t=>t.onclick=()=>{
+  document.querySelectorAll('.tab').forEach(x=>x.classList.remove('active'))
+  t.classList.add('active')
+  $('#pane-ask').style.display = t.dataset.t==='ask'?'':'none'
+  $('#pane-verify').style.display = t.dataset.t==='verify'?'':'none'
+})
+
+// sample chips: one tap fills the box and runs it — a visitor shouldn't need to know law to see this work
+document.querySelectorAll('.chip').forEach(ch=>ch.onclick=()=>{
+  if(ch.dataset.q){ $('#q').value = ch.dataset.q; $('#askBtn').click() }
+  if(ch.dataset.c){ $('#cite').value = ch.dataset.c; $('#verBtn').click() }
+})
+
+$('#askBtn').onclick = async () => {
+  const q = $('#q').value.trim(); if(!q) return
+  $('#askBtn').disabled = true
+  $('#askOut').innerHTML = '<div class="spin">Seeking — multiple query shapes against 350 real opinions…</div>'
+  try {
+    const r = await fetch('/api/ask',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({question:q})})
+    const d = await r.json()
+    if(d.error){ $('#askOut').innerHTML = `<div class="gap">${esc(d.error)}</div>`; return }
+    let h = ''
+    if(d.summary) h += `<div class="summary">${esc(d.summary)}</div>`
+    if(d.enforcementFired) h += `<div class="enforce">⚙ quote-verifier fired on the first draft — what you see survived mechanical checking</div>`
+    for(const c of d.claims||[]){
+      h += `<div class="claim ${esc(c.grade)}">
+        <div class="grade">${esc(c.grade)} · ${esc(c.caseName)} · ${esc(c.court)} · ${esc(c.dateFiled)} · ${esc(c.precedentialStatus||'')}</div>
+        <div class="body">
+          <div>${esc(c.statement)}</div>
+          <div class="quote">“${esc(c.quote)}”</div>
+          <div class="src">${srcLink(c.absoluteUrl, 'source: CourtListener ↗')}</div>
+        </div>
+      </div>`
+    }
+    if(d.gap) h += `<div class="gap"><b>What this corpus doesn't answer:</b> ${esc(d.gap)}</div>`
+    h += `<div class="meta">searches tried: ${(d.searchesTried||[]).map(esc).join(' · ')} — opinions read in full: ${Number(d.evidenceCount) || 0}${d.served==='cache' ? ' — served from cache' : ''}</div>`
+    $('#askOut').innerHTML = h || '<div class="gap">No grounded claims could be made.</div>'
+  } catch(e){ $('#askOut').innerHTML = `<div class="gap">request failed: ${esc(e.message)}</div>` }
+  finally { $('#askBtn').disabled = false }
+}
+
+$('#verBtn').onclick = async () => {
+  const cite = $('#cite').value.trim(); if(!cite) return
+  $('#verBtn').disabled = true
+  $('#verOut').innerHTML = '<div class="spin">Checking the record…</div>'
+  try {
+    const r = await fetch('/api/verify',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({citation:cite})})
+    const d = await r.json()
+    if(d.error){ $('#verOut').innerHTML = `<div class="gap">${esc(d.error)}</div>`; return }
+    if(d.verdict==='NOT_IN_CORPUS'){
+      let h = `<div class="verdict"><span class="stamp no">Not in corpus</span><div class="note">${esc(d.note)}</div></div>`
+      if((d.nearest||[]).length){
+        h += `<div class="meta" style="margin-top:10px">Nearest matches we do hold:</div>`
+        for(const n of d.nearest) h += `<div class="claim RELATED"><div class="grade">${esc(n.court)} · ${esc(n.dateFiled)}</div><div class="body">${esc(n.caseName)} — ${srcLink(n.absoluteUrl, 'source ↗')}</div></div>`
+      }
+      $('#verOut').innerHTML = h
+    } else {
+      const m = d.match
+      $('#verOut').innerHTML = `<div class="verdict"><span class="stamp yes">On the record</span>
+        <div><b>${esc(m.caseName)}</b> · ${esc(m.court)} · ${esc(m.dateFiled)} <span class="meta">(found ${d.verdict==='FOUND_BY_CITATION'?'by citation':'by name'})</span></div>
+        <div class="meta">citations: ${(m.citations||[]).map(esc).join('; ')||'—'}</div>
+        <div class="quote">${esc((m.excerpt||'').slice(0,400))}…</div>
+        ${srcLink(m.absoluteUrl, 'read the full opinion on CourtListener ↗')}</div>`
+    }
+  } catch(e){ $('#verOut').innerHTML = `<div class="gap">request failed: ${esc(e.message)}</div>` }
+  finally { $('#verBtn').disabled = false }
+}
+</script>
+</body>
+</html>
