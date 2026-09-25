@@ -1,0 +1,19 @@
+name = "honest-associate"
+main = "worker.js"
+# ≤2026-06-10: the local wrangler 4.98 workerd rejects newer dates (measured 2026-09-23); nothing here needs one
+compatibility_date = "2026-06-01"
+
+# Secrets (set via `wrangler secret bulk`, never in this file):
+#   ANTHROPIC_API_KEY    — DEDICATED workspace key: $25/mo cap, expires ~2026-10-24, $10 email alert.
+#                          Shares nothing with production systems (isolated 2026-09-24).
+#   SANITY_CONTEXT_TOKEN — Viewer+Context bearer for the hosted MCP endpoint (30-day expiry)
+#   SANITY_READ_TOKEN    — only needed if the dataset is flipped private; public dataset reads work bare
+
+[assets]
+directory = "public"
+
+# global ask-budget counter + answer cache (per-isolate rate limiting resets on new isolates —
+# KV is the shared ground truth that makes distributed abuse pointless)
+[[kv_namespaces]]
+binding = "ASK_GUARD"
+id = "96b18b1b77314a84adfe6f636f06349d"

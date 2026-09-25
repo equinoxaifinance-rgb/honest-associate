@@ -1,0 +1,12 @@
+.env
+.dev.vars
+node_modules/
+.wrangler/
+dist/
+*.log
+wr.pid
+secrets.tmp.json
+.sanity/
+STATE.md
+WAKE-REPORT.md
+ENTRY-POST-DRAFT.md

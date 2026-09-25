@@ -1,0 +1,19 @@
+{
+  "name": "honest-associate-studio",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Sanity Studio for the Honest Associate — a legal research agent that cannot cite a case that is not in its corpus",
+  "type": "module",
+  "scripts": {
+    "dev": "sanity dev",
+    "build": "sanity build",
+    "deploy": "sanity deploy",
+    "schema:deploy": "sanity schema deploy"
+  },
+  "dependencies": {
+    "react": "^19.2.2",
+    "react-dom": "^19.2.2",
+    "sanity": "^5.31.0",
+    "styled-components": "^6.1.0"
+  }
+}
