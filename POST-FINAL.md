@@ -128,12 +128,21 @@ https://github.com/equinoxaifinance-rgb/honest-associate/blob/main/docs/agent-se
 
 ## Why I Built This
 
-Truthfully, we built this for a competition. But the design came from something real: I'm not a
-lawyer and I'm not a trained developer — I can't personally check whether an AI is telling me the
-truth. So the rule I gave this project was simple: don't just refuse to answer — become something
-a lawyer can actually trust, and if you can't prove it, don't say it. Halfway through, I asked one
-question that became the whole entry: turn the safety layer off and see if it makes things up. It
-did — 18 times in 50 runs. That's why the trust here isn't a promise in a prompt. It's code.
+I started using AI several months ago. I have learned that, as it exists today, it is powerful
+but unrefined — it will make something up with such confidence that people will believe it as
+fact, when it is a lie. It has cost people their jobs, their families, and their lives. I have
+done research on these pain points, and I have tried to create honesty that doesn't bend to
+theater: something tangible, that you can see works mechanically — not a statement of what it
+can do, but a piece of the infrastructure I've created.
+
+There are many in the world that are afraid of AI and unsure of what it even is. I would say the
+creators themselves are still figuring it out — but that is not a reason to hide behind that
+fear. My goal is to make AI accessible to everyone, from people that have never used it once to
+people that can't afford $200 a month to try and make change. Knowledge and wisdom should not be
+gated to those that wish to seek it, and I have built this product to show that even in
+scenarios where people have been burned consistently, there is still a silver lining.
+
+For those of you that are on the fence: I implore you to explore.
 
 ---
 
