@@ -5,7 +5,7 @@
 // Probe the dataset's embeddings-index state (list = read-only); create one only if ENABLE=1.
 // Blindness channel: any HTTP/parse failure prints UNKNOWN + the raw status, never a verdict.
 import { readFileSync } from 'fs'
-const env = Object.fromEntries(readFileSync('C:/Users/you/Desktop/honest-associate/.env', 'utf8').split(/\r?\n/).filter(Boolean).map(l => l.split(/=(.*)/s).slice(0, 2)))
+const env = Object.fromEntries(readFileSync(new URL('../.env', import.meta.url), 'utf8').split(/\r?\n/).filter(Boolean).map(l => l.split(/=(.*)/s).slice(0, 2)))
 const TOK = env.SANITY_WRITE_TOKEN
 const PROJECT = '0b9qmvox', DATASET = 'production'
 if (!TOK) { console.log('UNKNOWN — no SANITY_WRITE_TOKEN'); process.exit(3) }

@@ -16,9 +16,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { spawnSync, execFileSync } from 'node:child_process'
 
-const LOG = process.env.INGEST_LOG || 'C:/Users/you/AppData/Local/Temp/claude/C--/56d8be83-ff2a-4ab8-9c9d-848710d9e5bf/tasks/bqiz8fguh.output'
 const DIR = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'))
-const REPORT = 'C:/Users/you/Desktop/honest-associate/WAKE-REPORT.md'
+const LOG = process.env.INGEST_LOG || path.join(DIR, 'ingest.log')
+const REPORT = path.join(DIR, '..', 'WAKE-REPORT.md')
 const MAX_WAIT = Number(process.env.MAX_WAIT_MS) || 90 * 60 * 1000   // 90 min hard cap
 const STALL_MS = Number(process.env.STALL_MS) || 10 * 60 * 1000      // 10 min of no growth = ended
 const POLL = 20000
@@ -54,7 +54,7 @@ try {
 // census + corpus banner — failure is logged, never cancels shutdown
 try {
   const env = { ...process.env }
-  const dotenv = fs.readFileSync('C:/Users/you/Desktop/honest-associate/.env', 'utf8')
+  const dotenv = fs.readFileSync(path.join(DIR, '..', '.env'), 'utf8')
   const m = dotenv.match(/SANITY_WRITE_TOKEN=(\S+)/)
   if (m) env.SANITY_WRITE_TOKEN = m[1]
   const r = spawnSync(process.execPath, [path.join(DIR, 'census.mjs')], { encoding: 'utf8', env, timeout: 180000 })

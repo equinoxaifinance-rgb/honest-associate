@@ -15,7 +15,7 @@
 // this is the complementary arm — harness constant, engine swapped down.
 // Blindness channel: engine/probe failures print UNKNOWN and the arm is marked unmeasured.
 import { readFileSync } from 'fs'
-const env = Object.fromEntries(readFileSync('C:/Users/you/Desktop/honest-associate/agent/.dev.vars', 'utf8').split(/\r?\n/).filter(Boolean).map(l => l.split(/=(.*)/s).slice(0, 2)))
+const env = Object.fromEntries(readFileSync(new URL('./.dev.vars', import.meta.url), 'utf8').split(/\r?\n/).filter(Boolean).map(l => l.split(/=(.*)/s).slice(0, 2)))
 const OLLAMA = 'http://127.0.0.1:11434'
 const LOCAL_MODEL = process.env.LOCAL_MODEL || 'local-qwen3-4b-instruct-r20-32k:latest'
 const EVIDENCE_DOCS = 4, EVIDENCE_CHARS = 12000, TEMP = 0.2

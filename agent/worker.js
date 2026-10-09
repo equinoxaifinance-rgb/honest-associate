@@ -1,6 +1,6 @@
 // Honest Associate — the legal research agent that cannot cite a case that isn't in its corpus.
-// PORTED-FROM: the an earlier project worker hardening pattern (per-IP rate limit, message caps, API key
-//   server-side only; see earlier-auth-hardening — fail-open paths are wallet-drains, so every
+// PORTED-FROM: an earlier worker's hardening pattern (per-IP rate limit, message caps, API key
+//   server-side only — fail-open paths are wallet-drains, so every
 //   public route here is capped: RATE_LIMIT/ip, MAX_Q chars, cheap model, bounded search budget.
 //   Known limit, named: the in-memory rate map resets per worker isolate — demo-tier protection).
 // KEY ISOLATION (resolved 2026-09-24): ANTHROPIC_API_KEY here is a DEDICATED workspace key —

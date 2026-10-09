@@ -13,7 +13,7 @@
 // engine-shootout pilot for kinship.
 // Blindness channel: retrieval/engine failures print UNKNOWN, never a verdict.
 import { readFileSync } from 'fs'
-const env = Object.fromEntries(readFileSync('C:/Users/you/Desktop/honest-associate/agent/.dev.vars', 'utf8').split(/\r?\n/).filter(Boolean).map(l => l.split(/=(.*)/s).slice(0, 2)))
+const env = Object.fromEntries(readFileSync(new URL('./.dev.vars', import.meta.url), 'utf8').split(/\r?\n/).filter(Boolean).map(l => l.split(/=(.*)/s).slice(0, 2)))
 // PRODPARITY=1 omits temperature entirely -> provider default, matching the live worker exactly
 const EVIDENCE_DOCS = 4, EVIDENCE_CHARS = 12000, TEMP = process.env.PRODPARITY ? undefined : 0.2
 const norm = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim()
